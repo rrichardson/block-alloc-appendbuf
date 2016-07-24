@@ -6,45 +6,46 @@
 //! A Sync append-only buffer with Send views.
 //!
 
-extern crate memalloc;
-
+extern crate block_allocator;
 use std::sync::atomic::{self, AtomicUsize, Ordering};
 use std::ops::Deref;
 use std::io::Read;
 use std::{io, mem, fmt};
+use block_allocator::Allocator;
 
 /// An append-only, atomically reference counted buffer.
-pub struct AppendBuf {
-    alloc: *mut AllocInfo,
+pub struct AppendBuf<'a> {
+    alloc: *mut AllocInfo<'a>,
     position: usize
 }
 
-unsafe impl Send for AppendBuf {}
-unsafe impl Sync for AppendBuf {}
+unsafe impl<'a> Send for AppendBuf<'a> {}
+unsafe impl<'a> Sync for AppendBuf<'a> {}
 
-struct AllocInfo {
+struct AllocInfo<'a> {
     refcount: AtomicUsize,
+    allocator: &'a Allocator<'a>,
     buf: [u8]
 }
 
-unsafe impl Send for AllocInfo {}
-unsafe impl Sync for AllocInfo {}
+unsafe impl<'a> Send for AllocInfo<'a> {}
+unsafe impl<'a> Sync for AllocInfo<'a> {}
 
-/// A read-only view into an AppendBuf.
-pub struct Slice {
-    alloc: *mut AllocInfo,
+/// A read-only view into an AppendBuf<'a>.
+pub struct Slice<'a> {
+    alloc: *mut AllocInfo<'a>,
     offset: usize,
     len: usize
 }
 
-unsafe impl Send for Slice {}
-unsafe impl Sync for Slice {}
+unsafe impl<'a> Send for Slice<'a> {}
+unsafe impl<'a> Sync for Slice<'a> {}
 
-impl Slice {
+impl<'a> Slice<'a> {
     /// Get a subslice starting from the passed offset.
-    pub fn slice_from(&self, offset: usize) -> Slice {
+    pub fn slice_from(&self, offset: usize) -> Slice<'a> {
         if self.len < offset {
-            panic!("Sliced past the end of an appendbuf::Slice,
+            panic!("Slice<'a>d past the end of an appendbuf::Slice<'a>,
                    the length was {:?} and the desired offset was {:?}",
                    self.len, offset);
         }
@@ -59,9 +60,9 @@ impl Slice {
     }
 
     /// Get a subslice of the first len elements.
-    pub fn slice_to(&self, len: usize) -> Slice {
+    pub fn slice_to(&self, len: usize) -> Slice<'a> {
         if self.len < len {
-            panic!("Sliced past the end of an appendbuf::Slice,
+            panic!("Slice<'a>d past the end of an appendbuf::Slice<'a>,
                    the length was {:?} and the desired length was {:?}",
                    self.len, len);
         }
@@ -77,7 +78,7 @@ impl Slice {
 
     /// Get a subslice starting at the passed `start` offset and ending at
     /// the passed `end` offset.
-    pub fn slice(&self, start: usize, end: usize) -> Slice {
+    pub fn slice(&self, start: usize, end: usize) -> Slice<'a> {
         let slice = self.slice_from(start);
         slice.slice_to(end - start)
     }
@@ -87,38 +88,17 @@ impl Slice {
     }
 }
 
-impl AppendBuf {
-    /// Create a new, empty AppendBuf with the given capacity.
-    pub fn new(len: usize) -> AppendBuf {
+impl<'a> AppendBuf<'a> {
+    /// Create a new, empty AppendBuf<'a> with the given capacity.
+    pub fn new(allocator: &'a Allocator) -> AppendBuf<'a> {
         AppendBuf {
-            alloc: unsafe { AllocInfo::allocate(len) },
+            alloc: unsafe { AllocInfo::allocate(allocator) },
             position: 0
         }
     }
 
-    /// Create an AppendBuf from an existing Vec.
-    ///
-    /// The capacity of the AppendBuf is the capacity of the Vec with space extracted
-    /// at the beginning for the reference count. The reference count occupies the space
-    /// of a usize, and the Vec must have enough space for it.
-    ///
-    /// If the Vec is too short, it is returned in the error value.
-    pub fn from_buf(vec: Vec<u8>) -> Result<Self, Vec<u8>> {
-        if vec.capacity() < mem::size_of::<AtomicUsize>() {
-            return Err(vec)
-        }
-
-        let vec_len = vec.len();
-        let alloc_info = unsafe { AllocInfo::from_buf(vec) };
-
-        Ok(AppendBuf {
-            alloc: alloc_info,
-            position: vec_len - mem::size_of::<AtomicUsize>()
-        })
-    }
-
-    /// Create a new Slice of the entire AppendBuf so far.
-    pub fn slice(&self) -> Slice {
+    /// Create a new Slice<'a> of the entire AppendBuf<'a> so far.
+    pub fn slice(&self) -> Slice<'a> {
         self.allocinfo().increment();
 
         Slice {
@@ -128,12 +108,12 @@ impl AppendBuf {
         }
     }
 
-    /// Retrieve the amount of remaining space in the AppendBuf.
+    /// Retrieve the amount of remaining space in the AppendBuf<'a>.
     pub fn remaining(&self) -> usize {
         self.allocinfo().buf.len() - self.position
     }
 
-    /// Write the data in the passed buffer onto the AppendBuf.
+    /// Write the data in the passed buffer onto the AppendBuf<'a>.
     ///
     /// This is an alternative to using the implementation of `std::io::Write`
     /// which does not unnecessarily use `Result`.
@@ -147,9 +127,9 @@ impl AppendBuf {
         amount
     }
 
-    /// Get the remaining space in the AppendBuf for writing.
+    /// Get the remaining space in the AppendBuf<'a> for writing.
     ///
-    /// If you wish the see the data written in subsequent Slices,
+    /// If you wish the see the data written in subsequent Slice<'a>s,
     /// you must also call `advance` with the amount written.
     ///
     /// Reads from this buffer are reads into uninitalized memory,
@@ -159,7 +139,7 @@ impl AppendBuf {
          &mut self.allocinfo_mut().buf[position..]
     }
 
-    /// Advance the position of the AppendBuf.
+    /// Advance the position of the AppendBuf<'a>.
     ///
     /// You should only advance the buffer if you have written to a
     /// buffer returned by `get_write_buf`.
@@ -167,7 +147,7 @@ impl AppendBuf {
          self.position += amount;
     }
 
-    /// Read from the given io::Read into the AppendBuf.
+    /// Read from the given io::Read into the AppendBuf<'a>.
     ///
     /// Safety note: it is possible to read uninitalized memory if the
     /// passed io::Read incorrectly reports the number of bytes written to
@@ -188,19 +168,19 @@ impl AppendBuf {
     }
 }
 
-impl fmt::Debug for AppendBuf {
+impl<'a> fmt::Debug for AppendBuf<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Debug::fmt(&**self, f)
     }
 }
 
-impl fmt::Debug for Slice {
+impl<'a> fmt::Debug for Slice<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Debug::fmt(&**self, f)
     }
 }
 
-impl Deref for AppendBuf {
+impl<'a> Deref for AppendBuf<'a> {
     type Target = [u8];
 
     fn deref(&self) -> &[u8] {
@@ -208,11 +188,11 @@ impl Deref for AppendBuf {
     }
 }
 
-impl AsRef<[u8]> for AppendBuf {
+impl<'a> AsRef<[u8]> for AppendBuf<'a> {
     fn as_ref(&self) -> &[u8] { self }
 }
 
-impl io::Write for AppendBuf {
+impl<'a> io::Write for AppendBuf<'a> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         Ok(self.fill(buf))
     }
@@ -220,7 +200,7 @@ impl io::Write for AppendBuf {
     fn flush(&mut self) -> io::Result<()> { Ok(()) }
 }
 
-impl Deref for Slice {
+impl<'a> Deref for Slice<'a> {
     type Target = [u8];
 
     fn deref(&self) -> &[u8] {
@@ -228,12 +208,12 @@ impl Deref for Slice {
     }
 }
 
-impl AsRef<[u8]> for Slice {
+impl<'a> AsRef<[u8]> for Slice<'a> {
     fn as_ref(&self) -> &[u8] { self }
 }
 
-impl Clone for Slice {
-    fn clone(&self) -> Slice {
+impl<'a> Clone for Slice<'a> {
+    fn clone(&self) -> Slice<'a> {
         self.allocinfo().increment();
 
         Slice {
@@ -244,28 +224,15 @@ impl Clone for Slice {
     }
 }
 
-impl AllocInfo {
-    unsafe fn allocate(size: usize) -> *mut Self {
-        let alloc = memalloc::allocate(size + mem::size_of::<AtomicUsize>());
-        AllocInfo::from_raw_buf(alloc, size)
-    }
-
-    /// Creates an AllocInfo from a Vec.
-    ///
-    /// The Vec *must* have a capacity of *at least* `mem::size_of::<usize>()`.
-    unsafe fn from_buf(mut buf: Vec<u8>) -> *mut Self {
-        let refcount_size = mem::size_of::<AtomicUsize>();
-        let this = AllocInfo::from_raw_buf(buf.as_mut_ptr(), buf.capacity() - refcount_size);
-        mem::forget(buf);
-        this
-    }
-
-    /// Create an AllocInfo from a raw pointer.
-    ///
-    /// The pointer must point to an allocation of size `buf_cap + mem::size_of::<usize>()`.
-    unsafe fn from_raw_buf(buf: *mut u8, buf_cap: usize) -> *mut Self {
-        let this = mem::transmute::<_, *mut Self>((buf, buf_cap));
+impl<'a> AllocInfo<'a> {
+    unsafe fn allocate(allocator : &'a Allocator) -> *mut Self {
+        //TODO Handle this error
+        let buf = allocator.alloc_raw().unwrap();
+        let raw_size = allocator.get_block_size() as usize;
+        let usable_size = raw_size - (mem::size_of::<AtomicUsize>() + mem::size_of::<&Allocator>());
+        let this = mem::transmute::<_, *mut Self>((buf, usable_size));
         (*this).refcount = AtomicUsize::new(1);
+        (*this).allocator = allocator;
         this
     }
 
@@ -301,17 +268,19 @@ impl AllocInfo {
         // [1]: (www.boost.org/doc/libs/1_55_0/doc/html/atomic/usage_examples.html)
         atomic::fence(Ordering::Acquire);
 
-        drop(mem::transmute::<&AllocInfo, Box<AllocInfo>>(self))
+        let alloc  = self.allocator;
+        let (ptr, _) : (*mut u8, usize) = mem::transmute(self);
+        alloc.free_raw(mem::transmute(ptr)).unwrap(); // TODO handle this result better
     }
 }
 
-impl Drop for Slice {
+impl<'a> Drop for Slice<'a> {
     fn drop(&mut self) {
         unsafe { (*self.alloc).decrement() }
     }
 }
 
-impl Drop for AppendBuf {
+impl<'a> Drop for AppendBuf<'a> {
     fn drop(&mut self) {
         unsafe { (*self.alloc).decrement() }
     }
