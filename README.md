@@ -1,6 +1,10 @@
-# appendbuf
+# block-alloc-appendbuf
 
-> A Sync append-only buffer with Send views.
+> A Sync append-only buffer with Send views that uses block_allocator::Allocator. 
+
+This has been adapted directly from [appendbuf](https://github.com/reem/appendbuf) by [reem](https://github.com/reem) 
+It has been updated to use a fixed-size allocator, which means the API has changed to take a ptr to the block_allocator
+instead of a size, when creating new buffers. 
 
 ## [Documentation](https://crates.fyi/crates/appendbuf/0.1.6)
 
