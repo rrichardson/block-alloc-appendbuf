@@ -294,7 +294,8 @@ fn _compile_test() {
 
 #[test]
 fn test_write_and_slice() {
-    let mut buf = AppendBuf::new(10);
+    let alloc = Allocator::new(128, 100).unwrap();
+    let mut buf = AppendBuf::new(&alloc);
     assert_eq!(buf.fill(&[1, 2, 3]), 3);
     let slice = buf.slice();
     assert_eq!(&*slice, &[1, 2, 3]);
@@ -304,18 +305,20 @@ fn test_write_and_slice() {
 
 #[test]
 fn test_overlong_write() {
-    let mut buf = AppendBuf::new(5);
-    assert_eq!(buf.fill(&[1, 2, 3, 4, 5, 6]), 5);
+    let alloc = Allocator::new(32, 100).unwrap();
+    let mut buf = AppendBuf::new(&alloc);
+    assert_eq!(buf.fill(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]), 16);
     let slice = buf.slice();
-    assert_eq!(&*slice, &[1, 2, 3, 4, 5]);
+    assert_eq!(&*slice, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
 }
 
 #[test]
 fn test_slice_slicing() {
-    let data = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    let alloc = Allocator::new(32, 10).unwrap();
+    let data = &[1, 2, 3, 4, 5, 6, 7, 8];
 
-    let mut buf = AppendBuf::new(10);
-    assert_eq!(buf.fill(data), 10);
+    let mut buf = AppendBuf::new(&alloc);
+    assert_eq!(buf.fill(data), 8);
 
     assert_eq!(&*buf.slice(), data);
     assert_eq!(&*buf.slice().slice_to(5), &data[..5]);
@@ -325,7 +328,8 @@ fn test_slice_slicing() {
 
 #[test]
 fn test_many_writes() {
-    let mut buf = AppendBuf::new(100);
+    let alloc = Allocator::new(128, 10).unwrap();
+    let mut buf = AppendBuf::new(&alloc);
 
     assert_eq!(buf.fill(&[1, 2, 3, 4]), 4);
     assert_eq!(buf.fill(&[10, 12, 13, 14, 15]), 5);
@@ -336,7 +340,8 @@ fn test_many_writes() {
 
 #[test]
 fn test_slice_then_write() {
-    let mut buf = AppendBuf::new(20);
+    let alloc = Allocator::new(32, 10).unwrap();
+    let mut buf = AppendBuf::new(&alloc);
     let empty = buf.slice();
     assert_eq!(&*empty, &[]);
 
@@ -354,9 +359,10 @@ fn test_slice_then_write() {
 
 #[test]
 fn test_slice_bounds_edge_cases() {
-    let data = &[1, 2, 3, 4, 5, 6];
+    let alloc = Allocator::new(32, 10).unwrap();
+    let data = &[1, 2, 3, 4, 5, 6, 7, 8];
 
-    let mut buf = AppendBuf::new(data.len());
+    let mut buf = AppendBuf::new(&alloc);
     assert_eq!(buf.fill(data), data.len());
 
     let slice = buf.slice().slice_to(data.len());
@@ -369,10 +375,11 @@ fn test_slice_bounds_edge_cases() {
 #[test]
 #[should_panic = "the desired offset"]
 fn test_slice_from_bounds_checks() {
-    let data = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    let alloc = Allocator::new(32, 10).unwrap();
+    let data = &[1, 2, 3, 4, 5, 6, 7, 8];
 
-    let mut buf = AppendBuf::new(10);
-    assert_eq!(buf.fill(data), 10);
+    let mut buf = AppendBuf::new(&alloc);
+    assert_eq!(buf.fill(data), 8);
 
     buf.slice().slice_from(100);
 }
@@ -380,22 +387,13 @@ fn test_slice_from_bounds_checks() {
 #[test]
 #[should_panic = "the desired length"]
 fn test_slice_to_bounds_checks() {
-    let data = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    let alloc = Allocator::new(32, 10).unwrap();
+    let data = &[1, 2, 3, 4, 5, 6, 7, 8];
 
-    let mut buf = AppendBuf::new(10);
-    assert_eq!(buf.fill(data), 10);
+    let mut buf = AppendBuf::new(&alloc);
+    assert_eq!(buf.fill(data), 8);
 
     buf.slice().slice_to(100);
 }
 
-#[test]
-fn test_convert_from_vec() {
-    let buf = vec![0, 0, 0, 0, 0, 0, 0, 0, // refcount
-                   1, 2, 3, 4, 5, 6, 7, 8]; // data
-    let append_buf = AppendBuf::from_buf(buf.clone()).unwrap();
-    assert_eq!(&*append_buf, &buf[8..]);
-
-    let buf = vec![0, 0, 0, 0]; // too short
-    assert_eq!(AppendBuf::from_buf(buf.clone()).unwrap_err(), buf);
-}
 
