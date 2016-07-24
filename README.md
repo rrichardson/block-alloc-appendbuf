@@ -17,13 +17,18 @@ read-only windows into data previously written to the buffer.
 
 ```rust
 extern crate appendbuf;
+extern crate block_allocator;
 
 use appendbuf::AppendBuf;
+use block_allocator::Allocator;
 
 fn main() {
-    // Create an AppendBuf with capacity for 100 bytes.
-    let mut buf = AppendBuf::new(100);
+    let alloc = Allocator(512, 100);
+    
+    // Create an AppendBuf with capacity for 496 (512 - 16) bytes.
+    let mut buf = AppendBuf::new(&alloc);
 
+    assert_eq!(buf.remaining(), 496);
     // Write some data in pieces.
     assert_eq!(buf.fill(&[1, 2, 3, 4]), 4);
     assert_eq!(buf.fill(&[10, 12, 13, 14, 15]), 5);
@@ -41,7 +46,7 @@ with the rest of your dependencies:
 
 ```toml
 [dependencies]
-appendbuf = "0.1"
+block-alloc-appendbuf = "0.1"
 ```
 
 ## Author
