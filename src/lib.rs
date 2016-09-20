@@ -7,11 +7,14 @@
 //!
 
 extern crate block_allocator;
+extern crate bytes;
 use std::sync::atomic::{self, AtomicUsize, Ordering};
 use std::ops::Deref;
 use std::io::Read;
 use std::{io, mem, fmt};
 use block_allocator::Allocator;
+use bytes::MutBuf;
+use bytes::alloc::BufferPool;
 
 /// An append-only, atomically reference counted buffer.
 pub struct AppendBuf<'a> {
@@ -107,6 +110,14 @@ impl<'a> AppendBuf<'a> {
             len: self.position
         }
     }
+    
+    /// Create a new Slice<'a> of the remaining writable buffer.
+    /// This is meant for interfacing with sockets or other read()
+    /// ables which require a &mut [u8]. 
+    /// NOTE After the read This must followed up directly by advance()
+    pub unsafe fn mut_bytes(&mut self) -> &'a mut [u8] {
+        &mut (*self.alloc).buf[self.position..]
+    }
 
     /// Retrieve the amount of remaining space in the AppendBuf<'a>.
     pub fn remaining(&self) -> usize {
@@ -200,6 +211,22 @@ impl<'a> io::Write for AppendBuf<'a> {
     fn flush(&mut self) -> io::Result<()> { Ok(()) }
 }
 
+
+impl<'a> MutBuf for AppendBuf<'a> {
+    fn remaining(&self) -> usize {
+        self.remaining()
+    }
+
+    unsafe fn advance(&mut self, cnt: usize) {
+        self.advance(cnt)
+    }
+
+    unsafe fn mut_bytes<'b>(&'b mut self) -> &'b mut [u8] {
+        self.mut_bytes()
+    }
+}
+
+
 impl<'a> Deref for Slice<'a> {
     type Target = [u8];
 
@@ -221,6 +248,46 @@ impl<'a> Clone for Slice<'a> {
             offset: self.offset,
             len: self.len
         }
+    }
+}
+
+///A block allocator which emits fixed-sized AppendBuf buffers
+pub struct AppendBufAllocator<'a> {
+    allocator : Allocator<'a>
+}
+
+impl<'a> AppendBufAllocator<'a> {
+
+    ///Construct a new block allocator which emits fixed-sized AppendBuf buffers
+    pub fn new(block_size : usize, num_blocks : usize) -> AppendBufAllocator<'a> {
+        AppendBufAllocator { 
+            allocator : Allocator::new(block_size as u32, num_blocks as u32).unwrap()
+        }
+    }
+
+    ///Get a fresh buffer from the slab
+    pub fn get(&'a self) -> Result<AppendBuf<'a>, io::Error> { unsafe {
+        self.allocator.alloc_raw().map_err(|_| { 
+                io::Error::new(io::ErrorKind::Other, "Out of Memory")
+            }).map(|buf| {
+            let raw_size = self.allocator.get_block_size() as usize;
+            let usable_size = raw_size - (mem::size_of::<AtomicUsize>() + mem::size_of::<&Allocator>());
+            let this = mem::transmute::<_, *mut AllocInfo>((buf, usable_size));
+            (*this).refcount = AtomicUsize::new(1);
+            (*this).allocator = &self.allocator;
+            AppendBuf {
+                alloc: this,
+                position: 0
+            }
+        })
+    }}
+}
+
+impl<'a> BufferPool<'a> for AppendBufAllocator<'a> {
+    type Item = AppendBuf<'a>;
+
+    fn get(&'a self) -> Result<Self::Item, io::Error> {
+        self.get()
     }
 }
 

@@ -11,3 +11,4 @@ license = "MIT"
 [dependencies]
 memalloc = "0.1"
 block_allocator = "~0.2"
+bytes = {git = "https://github.com/rrichardson/bytes"} 
